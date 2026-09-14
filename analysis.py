@@ -40,7 +40,17 @@ for df in (train, test):
 #      without a hard break between Dec 31 and Jan 1)
 #    - Calendar features
 #    - Other same-day weather readings (humidity, wind, pressure)
+#    - Lagged meantemp (1/3/7 days back) and a 7-day rolling mean, to
+#      capture short-term momentum. Train and test are concatenated
+#      (they are chronologically contiguous) before these are computed
+#      so the first days of test correctly pick up the last few days
+#      of train instead of starting with empty lags. Each lag/rolling
+#      value only ever looks backward, so no test-period target value
+#      leaks into a feature.
 # ---------------------------------------------------------------
+LAGS = (1, 3, 7)
+ROLLING_WINDOW = 7
+
 def add_features(df):
     df = df.copy()
     doy = df["date"].dt.dayofyear
@@ -52,11 +62,24 @@ def add_features(df):
     df["year"] = df["date"].dt.year
     return df
 
-train_fe = add_features(train)
-test_fe = add_features(test)
+combined = pd.concat([train.assign(split="train"), test.assign(split="test")],
+                      ignore_index=True).sort_values("date").reset_index(drop=True)
+combined = add_features(combined)
+
+for lag in LAGS:
+    combined[f"meantemp_lag{lag}"] = combined["meantemp"].shift(lag)
+combined[f"meantemp_roll{ROLLING_WINDOW}"] = (
+    combined["meantemp"].shift(1).rolling(ROLLING_WINDOW).mean()
+)
+
+LAG_FEATURES = [f"meantemp_lag{lag}" for lag in LAGS] + [f"meantemp_roll{ROLLING_WINDOW}"]
+combined = combined.dropna(subset=LAG_FEATURES).reset_index(drop=True)
+
+train_fe = combined[combined["split"] == "train"].reset_index(drop=True)
+test_fe = combined[combined["split"] == "test"].reset_index(drop=True)
 
 FEATURES = ["doy_sin", "doy_cos", "month_sin", "month_cos", "year",
-            "humidity", "wind_speed", "meanpressure"]
+            "humidity", "wind_speed", "meanpressure"] + LAG_FEATURES
 TARGET = "meantemp"
 
 X_train, y_train = train_fe[FEATURES], train_fe[TARGET]
@@ -120,14 +143,20 @@ plt.tight_layout()
 plt.savefig("predicted_vs_actual_scatter.png", dpi=150)
 plt.close()
 
-if best_name in ("Random Forest", "Gradient Boosting"):
-    importances = pd.Series(models[best_name].feature_importances_, index=FEATURES).sort_values()
-    plt.figure(figsize=(7, 4))
-    importances.plot(kind="barh", color="darkorange")
-    plt.title(f"Feature Importance — {best_name}")
-    plt.tight_layout()
-    plt.savefig("feature_importance.png", dpi=150)
-    plt.close()
+best_model = models[best_name]
+if hasattr(best_model, "feature_importances_"):
+    importances = pd.Series(best_model.feature_importances_, index=FEATURES).sort_values()
+    importance_label = "Feature Importance"
+else:
+    importances = pd.Series(best_model.coef_, index=FEATURES).abs().sort_values()
+    importance_label = "|Coefficient|"
+
+plt.figure(figsize=(7, 4))
+importances.plot(kind="barh", color="darkorange")
+plt.title(f"{importance_label} — {best_name}")
+plt.tight_layout()
+plt.savefig("feature_importance.png", dpi=150)
+plt.close()
 
 results_df.round(3).to_csv("model_comparison.csv")
 print("\nSaved: forecast_vs_actual.png, predicted_vs_actual_scatter.png, feature_importance.png, model_comparison.csv")

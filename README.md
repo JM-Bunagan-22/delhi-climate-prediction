@@ -14,7 +14,9 @@ Data source: [Daily Delhi Climate Data, Kaggle](https://www.kaggle.com/datasets/
 ## Approach
 
 1. **Data cleaning** — `meanpressure` contains invalid readings (raw range: -3 to 7,679 hPa); clipped to a realistic 950–1050 hPa band rather than dropping rows, to keep the daily series continuous.
-2. **Feature engineering** — cyclical (sin/cos) encoding of day-of-year and month so Dec 31 and Jan 1 are treated as adjacent, plus year (trend) and same-day humidity/wind/pressure.
+2. **Feature engineering**
+   - Cyclical (sin/cos) encoding of day-of-year and month so Dec 31 and Jan 1 are treated as adjacent, plus year (trend) and same-day humidity/wind/pressure.
+   - Lagged `meantemp` (1/3/7 days back) and a 7-day rolling mean, to capture short-term momentum. Train and test are chronologically contiguous, so lags for the first days of test are computed off the tail of train rather than left empty; every lag/rolling feature only looks backward, so no test-period target value leaks in.
 3. **Modeling** — compared Linear Regression, Random Forest, and Gradient Boosting regressors.
 4. **Validation** — trained only on train data, scored strictly on the unseen test period.
 
@@ -22,13 +24,15 @@ Data source: [Daily Delhi Climate Data, Kaggle](https://www.kaggle.com/datasets/
 
 | Model | MAE (°C) | RMSE (°C) | R² |
 |---|---|---|---|
-| **Linear Regression** | **2.11** | **2.56** | **0.84** |
-| Gradient Boosting | 2.13 | 2.74 | 0.81 |
-| Random Forest | 2.19 | 2.80 | 0.81 |
+| **Linear Regression** | **1.30** | **1.59** | **0.94** |
+| Random Forest | 1.29 | 1.63 | 0.93 |
+| Gradient Boosting | 1.39 | 1.75 | 0.92 |
 
-The seasonal cycle is strongly periodic, so a linear model on cyclically-encoded date features performs as well as more complex tree ensembles — extra model complexity doesn't add much here.
+Adding lagged temperature and a rolling average roughly halves the error versus calendar/seasonality features alone (previously MAE 2.11°C, R² 0.84). Most of that gain is short-term persistence — recent actual temperature is a strong predictor of tomorrow's — which a linear model captures just as well as the tree ensembles once it's given as a feature.
 
 ![Actual vs Predicted](forecast_vs_actual.png)
+
+![Feature Importance](feature_importance.png)
 
 ## Repo contents
 
@@ -39,6 +43,7 @@ The seasonal cycle is strongly periodic, so a linear model on cyclically-encoded
 ├── DailyDelhiClimateTest.csv
 ├── forecast_vs_actual.png
 ├── predicted_vs_actual_scatter.png
+├── feature_importance.png
 ├── model_comparison.csv
 └── requirements.txt
 ```
@@ -53,5 +58,5 @@ python analysis.py
 
 ## Possible next steps
 
-- Add lagged temperature (previous 1–7 days) and rolling averages to capture short-term momentum
 - Try a dedicated time-series model (SARIMA, Prophet) since forecasting typically won't have same-day humidity/wind/pressure available in advance — this version assumes those are known, which is realistic for nowcasting but not for a true multi-day-ahead forecast
+- Evaluate multi-day-ahead accuracy directly (e.g. walk-forward validation), since the current lag features assume yesterday's actual temperature is always available at prediction time
